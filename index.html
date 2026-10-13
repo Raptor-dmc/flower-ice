@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ถึงวนัช</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Mali:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --mist:#F0F2F2; --sand:#D9C4B8; --peach:#F2DDD0; --blush:#F2B2AC; --rose:#F2A0A0;
+    --ink:#7a4d4b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden}
+  body{
+    font-family:"Mali","Noto Sans Thai","Sarabun",system-ui,sans-serif;
+    color:var(--ink);
+    background:linear-gradient(180deg,var(--mist) 0%,var(--mist) 45%,var(--peach) 100%);
+  }
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+  main{
+    position:fixed;inset:0;z-index:2;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:max(24px,env(safe-area-inset-top)) 28px 46vh;
+  }
+  h1{font-size:clamp(2.4rem,9vw,4.4rem);font-weight:600;margin:0 0 .35em;line-height:1.2;
+     opacity:0;animation:rise 1.6s ease 1s forwards}
+  .msg{font-size:clamp(1.15rem,4.4vw,1.75rem);line-height:1.9;margin:0;max-width:20em;
+     opacity:0;animation:rise 1.6s ease 2.2s forwards}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+  .actions{
+    display:flex;gap:10px;justify-content:center;align-items:center;margin-top:1.4em;
+    opacity:0;animation:rise 1.4s ease 3.4s forwards;
+  }
+  .actions .pill{font-size:.85rem;padding:.3em 1em;position:relative;text-decoration:none;line-height:1.6;
+    display:inline-block}
+  .actions .pill img{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+
+  .pill{
+    font:inherit;font-size:.95rem;color:var(--ink);cursor:pointer;
+    background:rgba(240,242,242,.88);border:1.5px solid var(--ink);border-radius:999px;padding:.45em 1.2em;
+  }
+  .viewer{position:fixed;inset:0;z-index:10;background:var(--mist)}
+  .viewer[hidden]{display:none}
+  .viewer model-viewer{width:100%;height:100%;--poster-color:transparent}
+  .viewer .close{position:absolute;z-index:11;top:max(14px,env(safe-area-inset-top));right:14px}
+  .viewer .ar-btn{position:absolute;left:50%;bottom:max(24px,env(safe-area-inset-bottom));transform:translateX(-50%)}
+  .mverr{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;margin:0;line-height:1.8}
+  .mverr[hidden]{display:none}
+
+  .pill:focus-visible,.ar a:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){
+    h1,.msg,.actions{animation:none;opacity:1}
+  }
+</style>
+</head>
+<body>
+<canvas id="field" aria-hidden="true"></canvas>
+
+<main>
+  <h1>ถึงวนัช</h1>
+  <p class="msg">ถ้ามีเวลาสัก 80,000 ปี<br>ก็ขอให้เธอมีความสุขทุกๆวัน</p>
+  <div class="actions">
+    <button class="pill" id="open3d" type="button">ดูโมเดล 3 มิติ</button>
+    <a class="pill" rel="ar" href="tulip-pink.usdz" aria-label="ดูช่อทิวลิปแบบ AR ในห้อง"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">AR</a>
+  </div>
+</main>
+
+<div class="viewer" id="viewer" hidden>
+  <button class="pill close" id="close3d" type="button">ปิด</button>
+  <div id="mvhost" style="width:100%;height:100%"></div>
+  <p class="mverr" id="mverr" hidden>ยังไม่พบไฟล์ tulip-pink.glb ในเว็บ</p>
+</div>
+
+<audio id="bgm" src="bgm.mp3" loop autoplay preload="auto"></audio>
+
+<script>
+(() => {
+  const cv = document.getElementById('field'), ctx = cv.getContext('2d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const HEAD = ['#F2A0A0','#F2B2AC','#F2DDD0','#F7D57A','#F7D57A','#F5A36B','#E8707F','#C7B2EA','#B48ED6','#A9CBEE','#FFFFFF','#F4B6D2'];
+  const LEAF = ['#a9bea5','#98b094'];
+  let W, H, DPR, tulips = [], petals = [];
+
+  const rnd = (a,b) => a + Math.random()*(b-a);
+  const ease = t => t<0 ? 0 : t>1 ? 1 : 1-Math.pow(1-t,3);
+  const hex = c => [1,3,5].map(i => parseInt(c.slice(i,i+2),16));
+  function mix(a,b,t){
+    const x=hex(a), y=hex(b);
+    return 'rgb(' + x.map((v,i)=>Math.round(v+(y[i]-v)*t)).join(',') + ')';
+  }
+
+  function build(){
+    DPR = Math.min(devicePixelRatio||1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W*DPR; cv.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    const u = Math.max(18, Math.min(W,1200)/16);
+    const n = Math.max(36, Math.min(120, Math.round(W/11)));
+    tulips = [];
+    for (let i=0;i<n;i++){
+      const z = Math.random();
+      tulips.push({
+        x: rnd(-0.04,1.04)*W,
+        base: H*(0.72+0.34*z),
+        h: H*rnd(0.16,0.34)*(0.6+0.5*z),
+        r: u*rnd(0.6,1)*(0.55+0.55*z),
+        z, color: HEAD[Math.floor(Math.random()*HEAD.length)],
+        leaf: LEAF[i%2], phase: rnd(0,6.28), lean: rnd(-0.06,0.06),
+        delay: rnd(0.2,5.5)*1000
+      });
+    }
+    tulips.sort((a,b)=>a.z-b.z);
+    petals = Array.from({length:26},()=>newPetal(true));
+  }
+
+  function newPetal(init){
+    return {
+      x: rnd(0,W), y: init ? rnd(-H,H) : -20, s: rnd(5,10),
+      vy: rnd(18,40), vx: rnd(-10,10), a: rnd(0,6.28), va: rnd(-1.2,1.2),
+      c: HEAD[Math.floor(Math.random()*HEAD.length)], ph: rnd(0,6.28)
+    };
+  }
+
+  function petalShape(w,h){
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.bezierCurveTo(-w,-h*.25,-w*.9,-h*.85,0,-h);
+    ctx.bezierCurveTo(w*.9,-h*.85,w,-h*.25,0,0);
+    ctx.fill();
+  }
+
+  function drawTulip(T, t){
+    const p = reduce ? 1 : (t - T.delay) / 4200;
+    if (p <= 0) return;
+    const g = ease(p/0.6), b = ease((p-0.5)/0.5);
+    const fade = 1 - (1-T.z)*0.28;                 // back rows slightly paler
+    const sway = reduce ? 0 : Math.sin(t*0.0009 + T.phase) * 0.05;
+    const top = T.h * g;
+    const bend = (T.lean + sway) * top;
+    const x0 = T.x, y0 = T.base, x1 = x0 + bend, y1 = y0 - top;
+    const cx = x0, cy = y0 - top*0.55;
+
+    ctx.lineCap = 'round';
+    // leaves
+    if (g > 0.25){
+      const lg = ease((g-0.25)/0.75), lh = T.h*0.5*lg;
+      ctx.fillStyle = mix(T.leaf,'#F0F2F2',1-fade);
+      for (const d of [-1,1]){
+        ctx.save(); ctx.translate(x0, y0 - T.h*0.04*lg);
+        ctx.beginPath();
+        ctx.moveTo(0,0);
+        ctx.quadraticCurveTo(d*T.r*1.8, -lh*0.45, d*T.r*0.5 + d*sway*lh, -lh);
+        ctx.quadraticCurveTo(d*T.r*0.5, -lh*0.5, 0, 0);
+        ctx.fill(); ctx.restore();
+      }
+    }
+    // stem
+    ctx.strokeStyle = mix('#9fb59b','#F0F2F2',1-fade);
+    ctx.lineWidth = Math.max(2, T.r*0.22);
+    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.quadraticCurveTo(cx,cy,x1,y1); ctx.stroke();
+
+    // head
+    const hs = 0.35 + 0.65*b;
+    const tilt = Math.atan2(x1-cx, y0-y1) * 0.9;
+    ctx.save();
+    ctx.translate(x1,y1); ctx.rotate(tilt); ctx.scale(hs,hs);
+    const R = T.r, open = 0.3*b;
+    ctx.fillStyle = mix(T.color,'#7a4d4b',0.14 + (1-fade)*0.0);
+    ctx.save(); ctx.rotate(-open); petalShape(R*0.95,R*1.9); ctx.restore();
+    ctx.save(); ctx.rotate(open);  petalShape(R*0.95,R*1.9); ctx.restore();
+    ctx.fillStyle = mix(T.color,'#ffffff',0.12);
+    petalShape(R*0.9,R*2.0);
+    ctx.restore();
+  }
+
+  function drawPetal(P, dt, t){
+    P.y += P.vy*dt; P.x += (P.vx + Math.sin(t*0.001+P.ph)*14)*dt; P.a += P.va*dt;
+    if (P.y > H+20) Object.assign(P,newPetal(false), {x:rnd(0,W)});
+    ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.a);
+    ctx.fillStyle = P.c; ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.ellipse(0,0,P.s,P.s*0.55,0,0,6.283); ctx.fill();
+    ctx.restore();
+  }
+
+  let last = performance.now(), start = last;
+  function frame(now){
+    const dt = Math.min(0.05,(now-last)/1000); last = now;
+    const t = now - start;
+    ctx.clearRect(0,0,W,H);
+    for (const T of tulips) drawTulip(T,t);
+    if (!reduce) for (const P of petals) drawPetal(P,dt,t);
+    if (!reduce) requestAnimationFrame(frame);
+  }
+
+  build();
+  if (reduce){ frame(performance.now()); } else requestAnimationFrame(frame);
+  let rt; addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(()=>{build(); if(reduce) frame(performance.now());},200); });
+
+
+  // 3D viewer (loads model-viewer only when opened)
+  const viewer = document.getElementById('viewer'), host = document.getElementById('mvhost'),
+        err = document.getElementById('mverr');
+  let mvReady = false;
+  function openViewer(){
+    viewer.hidden = false;
+    if (mvReady) return;
+    mvReady = true;
+    const sc = document.createElement('script');
+    sc.type = 'module';
+    sc.src = 'https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js';
+    document.head.appendChild(sc);
+    const mv = document.createElement('model-viewer');
+    mv.setAttribute('src','tulip-pink.glb');
+    mv.setAttribute('ios-src','tulip-pink.usdz');
+    mv.setAttribute('alt','ช่อทิวลิป 3 มิติ');
+    mv.setAttribute('ar',''); mv.setAttribute('ar-modes','webxr scene-viewer quick-look');
+    mv.setAttribute('ar-placement','floor');
+    mv.setAttribute('camera-controls',''); mv.setAttribute('auto-rotate','');
+    mv.setAttribute('shadow-intensity','1'); mv.setAttribute('touch-action','pan-y');
+    const ab = document.createElement('button');
+    ab.slot = 'ar-button'; ab.className = 'pill ar-btn'; ab.textContent = 'วางในห้อง (AR)';
+    mv.appendChild(ab);
+    mv.addEventListener('error', () => { err.hidden = false; });
+    mv.addEventListener('load', () => { err.hidden = true; });
+    host.appendChild(mv);
+  }
+  document.getElementById('open3d').addEventListener('click', openViewer);
+  document.getElementById('close3d').addEventListener('click', () => { viewer.hidden = true; });
+  addEventListener('keydown', e => { if (e.key === 'Escape') viewer.hidden = true; });
+
+  // music: try to play on load; if the browser blocks it, start on the first touch
+  const audio = document.getElementById('bgm');
+  const EVENTS = ['pointerdown','touchend','click','keydown','scroll','wheel'];
+  function arm(){
+    const go = () => audio.play().then(() => EVENTS.forEach(ev => removeEventListener(ev, go, true))).catch(() => {});
+    EVENTS.forEach(ev => addEventListener(ev, go, {capture:true, passive:true}));
+  }
+  audio.play().catch(arm);
+})();
+</script>
+</body>
+</html>
